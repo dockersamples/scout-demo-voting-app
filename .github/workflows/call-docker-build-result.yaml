@@ -1,82 +1,81 @@
-name: Build Result
-# template source: https://github.com/dockersamples/.github/blob/main/templates/call-docker-build.yaml
+name: docker-build-demo
 
 on:
-  # we want pull requests so we can build(test) but not push to image registry
   push:
-    branches:
-      - 'main'
-    # only build when important files change
-    paths:
-      - 'result/**'
-      - '.github/workflows/call-docker-build-result.yaml'
-  pull_request:
-    branches:
-      - 'main'
-    # only build when important files change
-    paths:
-      - 'result/**'
-      - '.github/workflows/call-docker-build-result.yaml'
+    branches: ["main"]
+    tags: ["v*.*.*"]
+  pull_request_target:
+    branches: ["main"]
+
+env:
+  IMAGE_NAME: yournamespace/scout-demo-voting-app-result
+  SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
+  DOCKERFILE_PATH: vote/Dockerfile
 
 jobs:
-  call-docker-build:
+  build:
+    runs-on: ubuntu-latest
 
-    name: Result Call Docker Build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.SHA }}
 
-    uses: dockersamples/.github/.github/workflows/reusable-docker-build.yaml@main
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v2.5.0
 
-    permissions:
-      contents: read
-      packages: write # needed to push docker image to ghcr.io
-      pull-requests: write # needed to create and update comments in PRs
-    
-    secrets:
+      - name: Log into registry
+        uses: docker/login-action@v2.1.0
+        with:
+          username: ajeetraina
+          password: ${{ secrets.DOCKER_PAT }}
 
-      # Only needed if with:dockerhub-enable is true below
-      dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v4.4.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SHA }}
+            com.docker.image.source.entrypoint=${{ env.DOCKERFILE_PATH }}
 
-      # Only needed if with:dockerhub-enable is true below
-      dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    with:
+      - name: Build and push Docker image on push
+        id: build-and-push
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: docker/build-push-action@v4.0.0
+        with:
+          context: vote
+          load: false
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: "linux/amd64,linux/arm64"
+          sbom: false
+          provenance: false
       
-      ### REQUIRED
-      ### ENABLE ONE OR BOTH REGISTRIES
-      ### tell docker where to push.
-      ### NOTE if Docker Hub is set to true, you must set secrets above and also add account/repo/tags below
-      dockerhub-enable: true
-      ghcr-enable: true
+      - name: Build and push Docker image on PR
+        id: build-and-push-pr
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: docker/build-push-action@v4.0.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: "linux/arm64"
+          sbom: false
+          provenance: false          
 
-      ### REQUIRED 
-      ### A list of the account/repo names for docker build. List should match what's enabled above
-      ### defaults to:
-      image-names: |
-        ghcr.io/dockersamples/example-voting-app-result
-        dockersamples/examplevotingapp_result
+      - name: Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: docker/scout-action@788bd7991dd23939af62db37c4b77ec009021e17
+        with:
+          command: cves
+          image: ${{ steps.meta.outputs.tags }}
+          sarif-file: sarif.output.json
+          platform: "linux/arm64"
+          summary: true
       
-      ### REQUIRED set rules for tagging images, based on special action syntax:
-      ### https://github.com/docker/metadata-action#tags-input
-      ### defaults to:
-      tag-rules: |
-        type=raw,value=latest,enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
-        type=raw,value=before,enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
-        type=raw,value=after,enable=${{ endsWith(github.ref, github.event.repository.default_branch) }}
-        type=ref,event=pr
-      
-      ### path to where docker should copy files into image
-      ### defaults to root of repository (.)
-      context: result
-      
-      ### Dockerfile alternate name. Default is Dockerfile (relative to context path)
-      # file: Containerfile
-
-      ### build stage to target, defaults to empty, which builds to last stage in Dockerfile
-      # target:
-      
-      ### platforms to build for, defaults to linux/amd64
-      ### other options: linux/amd64,linux/arm64,linux/arm/v7
-      platforms: linux/amd64,linux/arm64,linux/arm/v7
-      
-      ### Create a PR comment with image tags and labels
-      ### defaults to false
-      # comment-enable: false
